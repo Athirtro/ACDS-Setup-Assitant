@@ -205,3 +205,30 @@ Revisa la consola de TailScale para asegurarte de la IP para reemplazar por `<ip
 - Genera `entry_list.ini` desde `[CAR_0]`.
 - Escribe `CARS=` separado por `;` y ajusta `MAX_CLIENTS` al número de slots.
 - Crea copias de seguridad `server_cfg.ini.bak` y `entry_list.ini.bak` antes de sobrescribir.
+
+### Cosas por hacer:
+1. Soporte para omitir sesiones de práctica y qualify.
+2. Soporte para el ajuste de hora.
+3. Soporte para el ajuste del clima.
+4. Soporte para el ajuste de temperatura ambiente y del asfalto.
+5. Soporte para el ajuste del viento.
+6. Soporte para el ajuste de condición del circuito.
+7. Soporte para el ajuste de ayudas (ABS, control de tracción, control de estabilidad, embrague automático).
+8. Soporte para el ajuste de realismo: desgaste de neumáticos, consumo de combustible, daños y mantas térmicas.
+9. Soporte para el ajuste completo de parámetros del servidor.
+10. Plantillas de sesión: Práctica, Hotlap, Race, Track Day y Weekend.
+11. Presets de evento reutilizables (pista, coches, liveries, sesiones, clima y ayudas).
+12. Interfaz gráfica accesible mediante API local.
+
+## Dirección técnica
+
+El script actual es un MVP. El desarrollo continúa en este orden:
+
+1. **Refactor por reglas:** cada parámetro configurable (hora, clima, viento, ayudas, realismo, sesiones, etc.) se encapsula en su propia unidad de lógica, con su clave, sección del `.ini`, tipo, validación y valor por defecto. Añadir un parámetro nuevo no debe requerir modificar el resto del programa.
+2. **Separación MVC simplificado:**
+   - Modelo: reglas, estado y repositorios (`.ini`, contenido, presets).
+   - Controlador: casos de uso (sincronizar, aplicar configuración, controlar el servicio).
+   - Vista: CLI como primera implementación, intercambiable.
+3. **Funcionalidades:** completar la lista de tareas pendientes sobre la nueva arquitectura.
+4. **Interfaz web:** API sobre el controlador y UI web para usuarios que no dominen la consola. Se inicia solo cuando las funcionalidades estén completas.
+5. **Instaladores:** scripts de un solo comando que descarguen el repositorio y preparen la infraestructura (distro, systemd, Tailscale, servidor dedicado, servicio y asistente).
