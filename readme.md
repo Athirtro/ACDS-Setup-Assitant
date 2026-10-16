@@ -63,7 +63,7 @@ tailscale ip -4
 
 - La IP mostrada es la que usarán los jugadores.
 - Las ACL de la tailnet deben permitir 9600 (UDP/TCP) y 8081 (TCP). **Por defecto lo están**.
-- Si juegas desde el mismo equipo, usa la IP de Tailscale igualmente.
+- Si juegas desde el mismo equipo, puedes usar la IP de Tailscale igualmente o conectarte desde la IP local que detecte el CM.
 
 ### 1.6 Firewall de Windows
 
@@ -122,7 +122,7 @@ Para detener el servidor manualmente, cierra la consola de `acServer.exe` o ejec
 taskkill /IM acServer.exe /T /F
 ```
 
-El servidor **no se reinicia con Windows**: se inicia al ejecutar el asistente, o manualmente ejecutando `acServer.exe` desde su carpeta.
+El servidor **no se reinicia con Windows**: se inicia al ejecutar el asistente, o manualmente ejecutando `acServer.exe` desde su carpeta o desde Steam al ejecutar el Assetto Corsa Dedicated Server.
 
 ### 2.3 Verificar el servidor
 
