@@ -25,7 +25,8 @@ DEFAULT_PRACTICE = 20
 DEFAULT_QUALIFY = 15
 DEFAULT_RACE_LAPS = 10
 DEFAULT_RACE_MINUTES = 30
-
+DEFAULT_QUALIFY_OVERTIME = 120
+DEFAULT_RACE_OVER_TIME = 180
 
 # ───────────────────────────── Dominio ─────────────────────────────
 
@@ -69,6 +70,9 @@ class State:
     practice: int | None = DEFAULT_PRACTICE
     qualify: int | None = DEFAULT_QUALIFY
     race: Race | None = field(default_factory=Race)
+    qualify_overtime: int = DEFAULT_QUALIFY_OVERTIME
+    race_over_time: int = DEFAULT_RACE_OVER_TIME
+    race_extra_lap: bool = False
     slots: list[Slot] = field(default_factory=list)
 
     @classmethod
@@ -115,6 +119,9 @@ class State:
             track=server.get("SERVER", "TRACK"),
             layout=server.get("SERVER", "CONFIG_TRACK"),
             slots=slots,
+            qualify_overtime=num("SERVER", "QUALIFY_MAX_WAIT_PERC", DEFAULT_QUALIFY_OVERTIME),
+            race_over_time=num("SERVER", "RACE_OVER_TIME", DEFAULT_RACE_OVER_TIME),
+            race_extra_lap=server.get("SERVER", "RACE_EXTRA_LAP") == "1",
             **sessions,
         )
 
@@ -197,6 +204,16 @@ class IniFile:
         with self.path.open("w", encoding="utf-8", newline="\r\n") as fh:
             self._cp.write(fh, space_around_delimiters=False)
 
+    def reorder(self, first: Sequence[str]) -> None:
+        data = {s: dict(self._cp.items(s)) for s in self._cp.sections()}
+        order = [s for s in first if s in data] + [s for s in data if s not in first]
+        for s in data:
+            self._cp.remove_section(s)
+        for s in order:
+            self._cp.add_section(s)
+            for key, value in data[s].items():
+                self._cp.set(s, key, value)
+
 
 # ───────────────────────── Escritura (Adapter) ─────────────────────────
 
@@ -210,7 +227,13 @@ class ConfigWriter:
         server.set("SERVER", "CONFIG_TRACK", s.layout)
         server.set("SERVER", "CARS", ";".join(dict.fromkeys(slot.model for slot in s.slots)))
         server.set("SERVER", "MAX_CLIENTS", len(s.slots))
+        server.set("SERVER", "QUALIFY_MAX_WAIT_PERC", s.qualify_overtime)
+        server.set("SERVER", "RACE_OVER_TIME", s.race_over_time)
+        server.set(
+            "SERVER", "RACE_EXTRA_LAP", int(s.race_extra_lap and s.race is not None and not s.race.by_laps)
+        )
         self._apply_sessions(server, s)
+        (server, s)
         server.save()
 
         entries = IniFile(self.cfg_dir / "entry_list.ini", fresh=True)
@@ -231,21 +254,20 @@ class ConfigWriter:
         defaults = {
             "PRACTICE": {"NAME": "Practice", "IS_OPEN": "1"},
             "QUALIFY": {"NAME": "Qualify", "IS_OPEN": "1"},
-            "RACE": {"NAME": "Race", "WAIT_TIME": "60", "IS_OPEN": "2"},
+            "RACE": {"NAME": "Race", "WAIT_TIME": "60"},
         }
         overrides: dict[str, dict[str, object] | None] = {
             "PRACTICE": {"TIME": s.practice} if s.practice is not None else None,
             "QUALIFY": {"TIME": s.qualify} if s.qualify is not None else None,
             "RACE": (
-                {"LAPS": s.race.value, "TIME": 0}
+                # IS_OPEN=1 siempre: con 2 la ventana de entrada se cierra 20 s antes de la salida
+                {"LAPS": s.race.value, "IS_OPEN": 1}
                 if s.race and s.race.by_laps
-                else {"LAPS": 0, "TIME": s.race.value}
+                else {"TIME": s.race.value, "IS_OPEN": 1}
                 if s.race
                 else None
             ),
         }
-        # Se conservan los valores existentes (IS_OPEN, WAIT_TIME, ...) y se reescriben
-        # las secciones activas en orden; las omitidas se eliminan del archivo.
         saved = {sec: server.items(sec) for sec in SESSION_SECTIONS}
         for sec in SESSION_SECTIONS:
             server.remove_section(sec)
@@ -253,9 +275,12 @@ class ConfigWriter:
             override = overrides[sec]
             if override is None:
                 continue
-            for key, value in {**defaults[sec], **saved[sec], **override}.items():
+            values = {**defaults[sec], **saved[sec], **override}
+            if sec == "RACE":
+                values.pop("TIME" if s.race.by_laps else "LAPS", None)
+            for key, value in values.items():
                 server.set(sec, key, value)
-
+        server.reorder(("SERVER", *SESSION_SECTIONS))
 
 # ───────────────────────────── Proceso ACDS ─────────────────────────────
 
@@ -420,6 +445,27 @@ class SessionsStep(Step):
         default = previous.value if previous and not previous.by_laps else DEFAULT_RACE_MINUTES
         return Race(False, ask_int("Duración de carrera (minutos)", default))
 
+class OvertimeStep(Step):
+    def run(self, ctx: Context) -> None:
+        s = ctx.state
+        if s.qualify is not None:
+            s.qualify_overtime = ask_int(
+                "Overtime de qualify (% de la mejor vuelta para terminar la vuelta en curso)",
+                s.qualify_overtime,
+                minimum=0,
+            )
+        if s.race is not None:
+            s.race_over_time = ask_int(
+                "Tiempo para terminar la carrera tras cruzar el líder (segundos)",
+                s.race_over_time,
+                minimum=0,
+            )
+            s.race_extra_lap = (
+                ask(questionary.confirm("¿Vuelta extra al acabar el tiempo?", default=s.race_extra_lap))
+                if not s.race.by_laps
+                else False
+            )
+
 
 class SlotsStep(Step):
     SAME_CAR = "Mismo coche para todos"
@@ -490,6 +536,8 @@ class ConfirmStep(Step):
             f"\nPráctica:  {f'{s.practice} min' if s.practice is not None else 'omitida'}"
             f"\nQualify:   {f'{s.qualify} min' if s.qualify is not None else 'omitida'}"
             f"\nCarrera:   {self._race_label(s.race)}"
+            f"\nOvertime:  qualify {s.qualify_overtime}% · carrera +{s.race_over_time}s"
+            f"{' · vuelta extra' if s.race_extra_lap else ''}"
             f"\nSlots:     {len(s.slots)}"
         )
         for i, slot in enumerate(s.slots):
@@ -539,7 +587,7 @@ def main() -> int:
     )
     ctx = Context(ContentScanner(content), state)
 
-    wizard = Wizard([TrackStep(), SessionsStep(), SlotsStep(), ConfirmStep()])
+    wizard = Wizard([TrackStep(), SessionsStep(), OvertimeStep(), SlotsStep(), ConfirmStep()])
     try:
         wizard.run(ctx)
     except Cancelled:

@@ -163,17 +163,25 @@ uv run ac_config.py --root "D:\SteamLibrary\steamapps\common\Assetto Corsa Dedic
 
 **Parámetros configurables**
 - Pista y layout.
-- Sesiones a ejecutar: práctica, qualify y carrera, en cualquier combinación (al menos una). *(En desarrollo, pendiente de pruebas)*
+- Sesiones a ejecutar: práctica, qualify y carrera, en cualquier combinación (al menos una).
 - Duración de práctica y qualify (minutos, mínimo 1). Por defecto: 20 y 15 minutos.
-- Carrera por vueltas (por defecto 10) o por tiempo en minutos. *(En desarrollo, pendiente de pruebas)*
+- Carrera por vueltas (por defecto 10) o por tiempo en minutos.
+- Overtime de qualify (`QUALIFY_MAX_WAIT_PERC`): porcentaje de la mejor vuelta de la sesión que se concede para terminar la vuelta en curso al acabarse el tiempo. Por defecto: 120.
+- Tiempo de cierre de carrera (`RACE_OVER_TIME`): segundos que tienen los demás pilotos para terminar tras cruzar el líder. Por defecto: 180.
+- Vuelta extra en carreras por tiempo (`RACE_EXTRA_LAP`). Por defecto: desactivada.
 - Número de slots (solo jugadores humanos, sin IA).
 - Asignación de coches: el mismo para todos o uno por slot.
 - Asignación de liveries.
 
+> La práctica no tiene overtime: el servidor la termina exactamente al cumplirse su duración.
+
 **Escritura y proceso**
 - Muestra un resumen y pide confirmación antes de guardar.
 - Detiene `acServer.exe`, escribe la configuración y lo vuelve a iniciar, incluso si la escritura falla.
-- Las sesiones omitidas se eliminan de `server_cfg.ini` (el servidor solo ejecuta las secciones presentes); las activas conservan sus claves existentes (`IS_OPEN`, `WAIT_TIME`, etc.). *(En desarrollo, pendiente de pruebas)*
+- Las sesiones omitidas se eliminan de `server_cfg.ini` (el servidor solo ejecuta las secciones presentes); las activas conservan sus claves existentes (`WAIT_TIME`, etc.).
+- Las secciones de sesión se escriben en orden (`[PRACTICE]`, `[QUALIFY]`, `[RACE]`) inmediatamente después de `[SERVER]`.
+- En carreras por vueltas solo se escribe `LAPS`, y en carreras por tiempo solo `TIME`; nunca ambas.
+- La carrera siempre se escribe con `IS_OPEN=1` (entrada libre). Con `IS_OPEN=2` la ventana de entrada se cierra antes de la salida y, con la carrera como primera sesión, el servidor entraba en bucle y rechazaba conexiones con error de *handshake*.
 - Genera `entry_list.ini` con una sección `[CAR_n]` por slot.
 - Escribe `CARS=` separado por `;` y ajusta `MAX_CLIENTS` al número de slots.
 - Crea copias de seguridad `server_cfg.ini.bak` y `entry_list.ini.bak` antes de sobrescribir.
@@ -181,7 +189,7 @@ uv run ac_config.py --root "D:\SteamLibrary\steamapps\common\Assetto Corsa Dedic
 
 ### Cosas por hacer
 
-1. Soporte para configurar libremente las sesiones (práctica, qualify y carrera): omitirlas, combinarlas y ajustar su duración. **En desarrollo, pendiente de pruebas.**
+1. Soporte para configurar libremente las sesiones (práctica, qualify y carrera): omitirlas, combinarlas y ajustar su duración y overtime. **Completada.**
 2. Soporte para el ajuste de hora.
 3. Soporte para el ajuste del clima.
 4. Soporte para el ajuste de temperatura ambiente y del asfalto.
@@ -199,7 +207,7 @@ uv run ac_config.py --root "D:\SteamLibrary\steamapps\common\Assetto Corsa Dedic
 
 El script actual es un MVP para Windows 11. El desarrollo continúa en este orden:
 
-1. **Refactor por reglas:** cada parámetro configurable (hora, clima, viento, ayudas, realismo, sesiones, etc.) se encapsula en su propia unidad de lógica, con su clave, sección del `.ini`, tipo, validación y valor por defecto. Añadir un parámetro nuevo no debe requerir modificar el resto del programa.
+1. **Refactor por reglas:** cada parámetro configurable (hora, clima, viento, ayudas, realismo, sesiones, overtime, etc.) se encapsula en su propia unidad de lógica, con su clave, sección del `.ini`, tipo, validación y valor por defecto. Añadir un parámetro nuevo no debe requerir modificar el resto del programa.
 2. **Separación MVC simplificado:**
    - Modelo: reglas, estado y repositorios (`.ini`, contenido, presets).
    - Controlador: casos de uso (aplicar configuración, controlar el proceso `acServer.exe`).
