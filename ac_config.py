@@ -8,15 +8,18 @@ import argparse
 import configparser
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import questionary
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
+from datetime import datetime, timezone
 
-import questionary
+
 
 ACDS_ROOT = Path(r"C:\Program Files (x86)\Steam\steamapps\common\Assetto Corsa Dedicated Server")
 ACDS_EXE = "acServer.exe"
@@ -27,6 +30,29 @@ DEFAULT_RACE_LAPS = 10
 DEFAULT_RACE_MINUTES = 30
 DEFAULT_QUALIFY_OVERTIME = 120
 DEFAULT_RACE_OVER_TIME = 180
+DEFAULT_TIME_MINUTES = 14 * 60  # 14:00 (SUN_ANGLE=16, valor por defecto de Kunos)
+DEFAULT_TIME_MULT = 1
+WFX_TAIL = re.compile(r"((?:_(?:type|time|mult|start)=-?\d+)+)$")
+
+
+def minutes_to_sun_angle(minutes: int) -> int:
+    return round(16 * (minutes - 13 * 60) / 60)
+
+
+def sun_angle_to_minutes(angle: int) -> int:
+    return round((13 * 60 + angle * 60 / 16) % (24 * 60))
+
+def wfx_split(graphics: str) -> tuple[str, dict[str, str]]:
+    match = WFX_TAIL.search(graphics)
+    if not match:
+        return graphics, {}
+    params = dict(p.split("=", 1) for p in match.group(1).split("_") if p)
+    return graphics[: match.start()], params
+
+def today_unix() -> int:
+    d = datetime.now(timezone.utc).date()
+    return int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp())
+
 
 # ───────────────────────────── Dominio ─────────────────────────────
 
@@ -74,12 +100,20 @@ class State:
     race_over_time: int = DEFAULT_RACE_OVER_TIME
     race_extra_lap: bool = False
     slots: list[Slot] = field(default_factory=list)
+    time_minutes: int = DEFAULT_TIME_MINUTES  # minutos desde 00:00
+    time_mult: int = DEFAULT_TIME_MULT
 
     @classmethod
     def from_files(cls, server: "IniFile", entries: "IniFile") -> "State":
         def num(section: str, key: str, default: int) -> int:
             raw = server.get(section, key)
             return int(raw) if raw.isdigit() else default
+
+        def signed(section: str, key: str, default: int) -> int:
+            try:
+                return int(server.get(section, key))
+            except ValueError:
+                return default
 
         def slot_index(section: str) -> int:
             suffix = section.split("_", 1)[1]
@@ -106,6 +140,7 @@ class State:
             )
             if entries.get(sec, "MODEL")
         ]
+        
         sessions = (
             {
                 "practice": timed("PRACTICE", DEFAULT_PRACTICE),
@@ -115,6 +150,22 @@ class State:
             if has_sessions
             else {}
         )
+
+        wfx: dict[str, str] = {}
+        
+        for sec in server.sections():
+            if sec.startswith("WEATHER_"):
+                _, wfx = wfx_split(server.get(sec, "GRAPHICS"))
+                if "time" in wfx:
+                    break
+                    
+        if "time" in wfx:
+            time_minutes = int(wfx["time"]) // 60 % (24 * 60)
+            time_mult = int(wfx.get("mult", DEFAULT_TIME_MULT))
+        else:
+            time_minutes = sun_angle_to_minutes(signed("SERVER", "SUN_ANGLE", 16))
+            time_mult = num("SERVER", "TIME_OF_DAY_MULT", DEFAULT_TIME_MULT)
+            
         return cls(
             track=server.get("SERVER", "TRACK"),
             layout=server.get("SERVER", "CONFIG_TRACK"),
@@ -122,6 +173,8 @@ class State:
             qualify_overtime=num("SERVER", "QUALIFY_MAX_WAIT_PERC", DEFAULT_QUALIFY_OVERTIME),
             race_over_time=num("SERVER", "RACE_OVER_TIME", DEFAULT_RACE_OVER_TIME),
             race_extra_lap=server.get("SERVER", "RACE_EXTRA_LAP") == "1",
+            time_minutes=time_minutes,
+            time_mult=time_mult,
             **sessions,
         )
 
@@ -232,8 +285,10 @@ class ConfigWriter:
         server.set(
             "SERVER", "RACE_EXTRA_LAP", int(s.race_extra_lap and s.race is not None and not s.race.by_laps)
         )
-        self._apply_sessions(server, s)
-        (server, s)
+        weather = [sec for sec in server.sections() if sec.startswith("WEATHER_")]
+        server.set("SERVER", "SUN_ANGLE", max(-80, min(80, minutes_to_sun_angle(s.time_minutes))))
+        server.set("SERVER", "TIME_OF_DAY_MULT", 1 if weather else s.time_mult)
+        self._apply_weather_time(server, s, weather)
         server.save()
 
         entries = IniFile(self.cfg_dir / "entry_list.ini", fresh=True)
@@ -281,6 +336,21 @@ class ConfigWriter:
             for key, value in values.items():
                 server.set(sec, key, value)
         server.reorder(("SERVER", *SESSION_SECTIONS))
+
+    @staticmethod
+    def _apply_weather_time(server: IniFile, s: State, weather: Sequence[str]) -> None:
+        for sec in weather:
+            base, params = wfx_split(server.get(sec, "GRAPHICS"))
+            parts = [base]
+            if "type" in params:
+                parts.append(f"type={params['type']}")
+            parts += [
+                f"time={s.time_minutes * 60}",
+                f"mult={s.time_mult}",
+                f"start={params.get('start') or today_unix()}",
+            ]
+            server.set(sec, "GRAPHICS", "_".join(parts))
+
 
 # ───────────────────────────── Proceso ACDS ─────────────────────────────
 
@@ -445,6 +515,7 @@ class SessionsStep(Step):
         default = previous.value if previous and not previous.by_laps else DEFAULT_RACE_MINUTES
         return Race(False, ask_int("Duración de carrera (minutos)", default))
 
+
 class OvertimeStep(Step):
     def run(self, ctx: Context) -> None:
         s = ctx.state
@@ -465,6 +536,28 @@ class OvertimeStep(Step):
                 if not s.race.by_laps
                 else False
             )
+
+
+class TimeStep(Step):
+    PATTERN = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)")
+
+    def run(self, ctx: Context) -> None:
+        s = ctx.state
+        default = f"{s.time_minutes // 60:02d}:{s.time_minutes % 60:02d}"
+        raw = ask(
+            questionary.text(
+                "Hora de inicio (HH:MM, formato 24 h)",
+                default=default,
+                validate=lambda v: bool(self.PATTERN.fullmatch(v.strip())) or "Formato HH:MM, de 00:00 a 23:59",
+            )
+        )
+        match = self.PATTERN.fullmatch(raw.strip())
+        s.time_minutes = int(match[1]) * 60 + int(match[2])
+        s.time_mult = ask_int(
+            "Multiplicador de tiempo (0 = congelado, 1 = tiempo real, 2 = el doble...)",
+            s.time_mult,
+            minimum=0,
+        )
 
 
 class SlotsStep(Step):
@@ -539,6 +632,7 @@ class ConfirmStep(Step):
             f"\nOvertime:  qualify {s.qualify_overtime}% · carrera +{s.race_over_time}s"
             f"{' · vuelta extra' if s.race_extra_lap else ''}"
             f"\nSlots:     {len(s.slots)}"
+            f"\nHora:      {s.time_minutes // 60:02d}:{s.time_minutes % 60:02d} (x{s.time_mult})"
         )
         for i, slot in enumerate(s.slots):
             print(f"  CAR_{i}: {slot.model} · {slot.skin or 'livery libre'}")
@@ -587,7 +681,9 @@ def main() -> int:
     )
     ctx = Context(ContentScanner(content), state)
 
-    wizard = Wizard([TrackStep(), SessionsStep(), OvertimeStep(), SlotsStep(), ConfirmStep()])
+    wizard = Wizard(
+        [TrackStep(), SessionsStep(), OvertimeStep(), TimeStep(), SlotsStep(), ConfirmStep()]
+    )
     try:
         wizard.run(ctx)
     except Cancelled:
