@@ -7,18 +7,19 @@ from __future__ import annotations
 import argparse
 import configparser
 import json
-import re
+import os
 import shutil
 import subprocess
 import sys
-import threading
-import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Sequence
 
 import questionary
+
+ACDS_ROOT = Path(r"C:\Program Files (x86)\Steam\steamapps\common\Assetto Corsa Dedicated Server")
+ACDS_EXE = "acServer.exe"
 
 
 # ───────────────────────────── Dominio ─────────────────────────────
@@ -131,7 +132,7 @@ class IniFile:
         self._cp = configparser.ConfigParser(interpolation=None, strict=False)
         self._cp.optionxform = str  # type: ignore[assignment]
         if path.exists() and not fresh:
-            self._cp.read(path, encoding="utf-8")
+            self._cp.read(path, encoding="utf-8-sig")
 
     def sections(self) -> list[str]:
         return self._cp.sections()
@@ -148,7 +149,7 @@ class IniFile:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.exists():
             shutil.copy2(self.path, self.path.with_name(self.path.name + ".bak"))
-        with self.path.open("w", encoding="utf-8", newline="\n") as fh:
+        with self.path.open("w", encoding="utf-8", newline="\r\n") as fh:
             self._cp.write(fh, space_around_delimiters=False)
 
 
@@ -183,145 +184,53 @@ class ConfigWriter:
         entries.save()
 
 
-# ───────────────────────────── Servicio ─────────────────────────────
+# ───────────────────────────── Proceso ACDS ─────────────────────────────
 
-class ServiceController:
-    def __init__(self, name: str, enabled: bool = True) -> None:
-        self.name = name
+class ServerProcess:
+    def __init__(self, root: Path, exe: str = ACDS_EXE, enabled: bool = True) -> None:
+        self.root = root
+        self.exe_path = root / exe
         self.enabled = enabled
 
-    def _ctl(self, action: str) -> None:
-        subprocess.run(["sudo", "systemctl", action, self.name], check=True)
+    def _pids(self) -> list[int]:
+        target = str(self.exe_path).replace("'", "''")
+        script = (
+            f"Get-Process -Name '{self.exe_path.stem}' -ErrorAction SilentlyContinue "
+            f"| Where-Object {{ $_.Path -eq '{target}' }} "
+            f"| ForEach-Object {{ $_.Id }}"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+        )
+        return [int(line) for line in result.stdout.split() if line.isdigit()]
 
     def is_active(self) -> bool:
-        return subprocess.run(
-            ["systemctl", "is-active", "--quiet", self.name]
-        ).returncode == 0
+        return bool(self._pids())
 
     def stop(self) -> None:
-        if self.enabled and self.is_active():
-            print(f"Deteniendo {self.name}...")
-            self._ctl("stop")
+        if not self.enabled:
+            return
+        pids = self._pids()
+        if not pids:
+            return
+        print(f"Deteniendo {self.exe_path.name}...")
+        for pid in pids:
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False, capture_output=True)
 
     def start(self) -> None:
-        if self.enabled:
-            print(f"Iniciando {self.name}...")
-            self._ctl("start")
-
-
-# ───────────────────────── Sincronización ─────────────────────────
-
-class ConsoleProgress:
-    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
-    def __init__(self, label: str = "Sincronizando") -> None:
-        self.label = label
-        self.count = 0
-        self.current = ""
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._t0 = 0.0
-        self._tty = sys.stdout.isatty()
-
-    def update(self, count: int, current: str) -> None:
-        self.count = count
-        self.current = current
-
-    def __enter__(self) -> "ConsoleProgress":
-        self._t0 = time.monotonic()
-        if self._tty:
-            self._thread = threading.Thread(target=self._spin, daemon=True)
-            self._thread.start()
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self._stop.set()
-        if self._thread:
-            self._thread.join()
-        if self._tty:
-            sys.stdout.write("\r\033[K")
-            sys.stdout.flush()
-
-    def _spin(self) -> None:
-        i = 0
-        while not self._stop.wait(0.1):
-            elapsed = time.monotonic() - self._t0
-            head = (
-                f"{self.FRAMES[i % len(self.FRAMES)]} {self.label}"
-                f" · {self.count} archivo(s) · {elapsed:.0f}s"
-            )
-            tail = f" · {self.current}" if self.current else " · comparando origen y destino…"
-            width = shutil.get_terminal_size().columns
-            sys.stdout.write("\r\033[K" + (head + tail)[: width - 1])
-            sys.stdout.flush()
-            i += 1
-
-
-ProgressCallback = Callable[[int, str], None]
-
-
-class ContentSynchronizer:
-    _CHANGE = re.compile(r"^([<>ch])([fdLDS])[.+?\w]{9} (.+)$")
-    _DELETE = re.compile(r"^\*deleting\s+(.+)$")
-
-    def __init__(
-        self,
-        source: Path,
-        dest: Path,
-        excludes: Sequence[str] = ("*.kn5",),
-        mirror: bool = False,
-    ) -> None:
-        self.source = source
-        self.dest = dest
-        self.excludes = excludes
-        self.mirror = mirror
-
-    def sync(self, on_progress: ProgressCallback | None = None) -> list[str]:
-        if not shutil.which("rsync"):
-            raise RuntimeError("rsync no está instalado")
-        if not self.source.is_dir():
-            raise FileNotFoundError(f"No existe el origen: {self.source}")
-
-        self.dest.mkdir(parents=True, exist_ok=True)
-        cmd = ["rsync", "-a", "--itemize-changes", "--chmod=D755,F644"]
-        cmd += [f"--exclude={pattern}" for pattern in self.excludes]
-        if self.mirror:
-            cmd.append("--delete")
-        cmd += [f"{self.source}/", f"{self.dest}/"]
-
-        touched: set[str] = set()
-        messages: list[str] = []
-        files = 0
-
-        with subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        ) as proc:
-            assert proc.stdout is not None
-            for raw in proc.stdout:
-                line = raw.rstrip("\n")
-                change = self._CHANGE.match(line)
-                delete = self._DELETE.match(line)
-                if not change and not delete:
-                    if line.strip():
-                        messages.append(line)
-                    continue
-
-                path = (change.group(3) if change else delete.group(1)).strip("/")
-                touched.add("/".join(path.split("/")[:2]))
-                if change and change.group(2) == "f":
-                    files += 1
-                if on_progress:
-                    on_progress(files, path)
-
-        if proc.returncode != 0:
-            raise subprocess.CalledProcessError(
-                proc.returncode, cmd, output="\n".join(messages[-5:])
-            )
-        return sorted(touched)
+        if not self.enabled:
+            return
+        if not self.exe_path.is_file():
+            print(f"Aviso: no se encontró {self.exe_path}")
+            return
+        print(f"Iniciando {self.exe_path.name}...")
+        subprocess.Popen(
+            [str(self.exe_path)],
+            cwd=self.root,
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+        )
 
 
 # ─────────────────────────── Interacción ───────────────────────────
@@ -384,7 +293,7 @@ class TrackStep(Step):
     def run(self, ctx: Context) -> None:
         tracks = {t.name: t for t in ctx.scanner.tracks()}
         if not tracks:
-            raise SystemExit("No hay pistas válidas en content/tracks")
+            raise SystemExit("No hay pistas válidas en content\\tracks")
         name = ask_choice("Pista", list(tracks), ctx.state.track)
         track = tracks[name]
         ctx.state.track = name
@@ -412,7 +321,7 @@ class SlotsStep(Step):
     def run(self, ctx: Context) -> None:
         cars = ctx.scanner.cars()
         if not cars:
-            raise SystemExit("No hay coches válidos en content/cars")
+            raise SystemExit("No hay coches válidos en content\\cars")
 
         previous = list(ctx.state.slots)
         count = ask_int("Número de coches (slots)", len(previous) or 2)
@@ -489,55 +398,29 @@ class Wizard:
 
 # ───────────────────────────── Entrada ─────────────────────────────
 
-def run_sync(source: Path, dest: Path, mirror: bool) -> None:
-    print(f"Origen:  {source}\nDestino: {dest}")
-    started = time.monotonic()
-    try:
-        with ConsoleProgress() as progress:
-            changes = ContentSynchronizer(source, dest, mirror=mirror).sync(progress.update)
-        elapsed = time.monotonic() - started
-        print(
-            f"Sincronizado en {elapsed:.1f}s: {len(changes)} elemento(s) actualizado(s)."
-            if changes
-            else f"Contenido al día ({elapsed:.1f}s)."
-        )
-        for item in changes:
-            print(f"  · {item}")
-    except (RuntimeError, FileNotFoundError, subprocess.CalledProcessError) as exc:
-        detail = getattr(exc, "output", "") or ""
-        print(f"Aviso: no se pudo sincronizar ({exc}). Se usará el contenido existente.")
-        if detail:
-            print(detail)
-
-
 def main() -> int:
+    if os.name != "nt":
+        print("Este script está diseñado para ejecutarse en Windows.")
+        return 2
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent)
-    parser.add_argument("--service", default="assetto-corsa.service")
-    parser.add_argument("--no-service", action="store_true")
-    parser.add_argument(
-        "--source",
-        type=Path,
-        default=Path("/mnt/c/Program Files (x86)/Steam/steamapps/common/Assetto Corsa Dedicated Server/content"),
-    )
-    parser.add_argument("--no-sync", action="store_true")
-    parser.add_argument("--mirror", action="store_true")
+    parser.add_argument("--root", type=Path, default=ACDS_ROOT, help="Carpeta raíz del ACDS")
+    parser.add_argument("--exe", default=ACDS_EXE, help="Nombre del ejecutable del servidor")
+    parser.add_argument("--no-service", action="store_true", help="No detener ni iniciar el servidor")
     args = parser.parse_args()
     root = args.root.expanduser().resolve()
 
-    if not args.no_sync:
-        run_sync(args.source.expanduser(), root / "content", args.mirror)
-
-    if not (root / "content").is_dir():
-        print(f"No existe {root / 'content'}")
+    content = root / "content"
+    cfg_dir = root / "cfg"
+    if not content.is_dir():
+        print(f"No existe {content}")
         return 2
 
-    cfg_dir = root / "cfg"
     state = State.from_files(
         IniFile(cfg_dir / "server_cfg.ini"),
         IniFile(cfg_dir / "entry_list.ini"),
     )
-    ctx = Context(ContentScanner(root / "content"), state)
+    ctx = Context(ContentScanner(content), state)
 
     wizard = Wizard([TrackStep(), DurationStep(), SlotsStep(), ConfirmStep()])
     try:
@@ -546,13 +429,16 @@ def main() -> int:
         print("Cancelado, sin cambios.")
         return 1
 
-    service = ServiceController(args.service, enabled=not args.no_service)
-    service.stop()
+    server = ServerProcess(root, args.exe, enabled=not args.no_service)
+    server.stop()
     try:
         ConfigWriter(cfg_dir).apply(ctx.state)
         print("Configuración guardada.")
+    except PermissionError as exc:
+        print(f"Sin permisos para escribir en {cfg_dir} ({exc}). Ejecuta la terminal como administrador.")
+        return 3
     finally:
-        service.start()
+        server.start()
     return 0
 
 

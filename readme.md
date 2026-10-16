@@ -1,88 +1,85 @@
-# Assetto Corsa Dedicated Server en Debian WSL
+# ACDS: Assetto Corsa Dedicated Server en Windows 11 (nativo)
 
 ## Descripción
 
-Servidor dedicado de Assetto Corsa ejecutado sobre Debian en WSL 2, accesible para otros jugadores mediante Tailscale (sin exponer puertos en el router). Incluye `ac_config.py`, un asistente interactivo en terminal que sincroniza el contenido del juego instalado en Windows y genera `server_cfg.ini` y `entry_list.ini` a partir de las pistas, coches y liveries disponibles.
+Servidor dedicado de Assetto Corsa ejecutado de forma nativa en Windows 11, accesible para otros jugadores mediante Tailscale (sin exponer puertos en el router). Incluye `ac_config.py`, un asistente interactivo en terminal que lee las pistas, coches y liveries disponibles en el servidor y genera `server_cfg.ini` y `entry_list.ini`.
 
 **Arquitectura**
 
-- Windows: Steam con *Assetto Corsa* y *Assetto Corsa Dedicated Server* instalados (origen del contenido y del binario `acServer`).
-- Debian WSL: ejecuta `acServer` como servicio systemd y el asistente de configuración.
-- Tailscale: red privada entre el servidor y los jugadores.
+- **Windows 11:** ejecuta `acServer.exe`, instalado vía Steam (*Assetto Corsa Dedicated Server*), y el asistente de configuración.
+- **Tailscale para Windows:** red privada (VPN/LAN) entre el servidor y los jugadores.
+- **`ac_config.py`:** se ejecuta directamente en PowerShell mediante `uv`. Opera sobre la carpeta del servidor en Steam, y controla el proceso con PowerShell (`Get-Process`), `taskkill` y `subprocess`. No requiere servicios de Windows.
 
 **Puertos:** 9600 (UDP y TCP) y 8081 (TCP).
 
-## 1. Infraestructura en Debian WSL
+## 1. Preparación del entorno
 
-Los comandos asumen `bash` (shell por defecto de Debian).
+Todos los comandos son de **PowerShell**.
 
-### 1.1 Requisitos
+### 1.1 Prerrequisitos
 
-- Windows 11 con WSL 2.
-- Steam con *Assetto Corsa* y *Assetto Corsa Dedicated Server* instalados.
-- Cuenta de Tailscale.
+- Windows 11.
+- Steam con *Assetto Corsa Dedicated Server* instalado.
+- [Tailscale para Windows](https://tailscale.com/download/windows) instalado y con sesión iniciada.
 
-### 1.2 Crear la distro (PowerShell)
+### 1.2 Chocolatey
+
+Desde **PowerShell como Administrador**:
 
 ```powershell
-wsl --install Debian --name AssettoCorsaServer
+Set-ExecutionPolicy Bypass -Scope Process -Force
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
 ```
 
-Crea el usuario cuando lo solicite. Luego entra a la distro con `wsl -d AssettoCorsaServer`.
+Verifica con `choco --version`.
 
-### 1.3 Verificar systemd
+### 1.3 Herramientas
 
-```bash
-ps -p 1 -o comm=
+```powershell
+choco install git uv -y
 ```
 
-Debe devolver `systemd`. Si no, ejecuta:
+Cierra y vuelve a abrir PowerShell para que `git` y `uv` queden en el `PATH`.
 
-```bash
-printf '[boot]\nsystemd=true\n' | sudo tee /etc/wsl.conf
+### 1.4 Clonar el repositorio
+
+```powershell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\Tools" | Out-Null
+git clone https://github.com/Athirtro/ACDS-WSL/ "$env:USERPROFILE\Tools\ACDS-WSL"
 ```
 
-y reinicia la distro.
+Actualizar en el futuro:
 
-### 1.4 Paquetes
-
-```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y curl rsync git
+```powershell
+git -C "$env:USERPROFILE\Tools\ACDS-WSL" pull
 ```
 
 ### 1.5 Tailscale
 
-```bash
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
+```powershell
 tailscale ip -4
 ```
 
 - La IP mostrada es la que usarán los jugadores.
-- Si juegas desde el mismo equipo, Tailscale también debe estar activo en Windows.
 - Las ACL de la tailnet deben permitir 9600 (UDP/TCP) y 8081 (TCP). **Por defecto lo están**.
+- Si juegas desde el mismo equipo, usa la IP de Tailscale igualmente.
 
-### 1.6 Copiar el servidor dedicado
+### 1.6 Firewall de Windows
 
-```bash
-STEAM="/mnt/c/Program Files (x86)/Steam/steamapps/common"
-SRV_SRC="$STEAM/Assetto Corsa Dedicated Server"
-DEST="$HOME/assetto-server"
+Permite el tráfico de `acServer.exe` (PowerShell como Administrador):
 
-mkdir -p "$DEST"
-rsync -a --exclude='content/' "$SRV_SRC/" "$DEST/"
-chmod +x "$DEST/acServer"
+```powershell
+$exe = "C:\Program Files (x86)\Steam\steamapps\common\Assetto Corsa Dedicated Server\acServer.exe"
+New-NetFirewallRule -DisplayName "ACDS TCP" -Direction Inbound -Program $exe -Protocol TCP -LocalPort 9600,8081 -Action Allow
+New-NetFirewallRule -DisplayName "ACDS UDP" -Direction Inbound -Program $exe -Protocol UDP -LocalPort 9600 -Action Allow
 ```
 
-El contenido (`content/`) lo sincroniza el asistente. Verifica con `ls "$DEST"` que existan `acServer` y `cfg/`.
+### 1.7 Ajustes base en `cfg\server_cfg.ini`
 
-### 1.7 Ajustes base en `cfg/server_cfg.ini`
-
-```bash
-micro "$DEST/cfg/server_cfg.ini"
+```powershell
+notepad "C:\Program Files (x86)\Steam\steamapps\common\Assetto Corsa Dedicated Server\cfg\server_cfg.ini"
 ```
-También puedes usar nano para editar archivos.
 
 Valores obligatorios para uso en LAN/VPN:
 
@@ -96,97 +93,70 @@ AUTH_PLUGIN_ADDRESS=
 ADMIN_PASSWORD=<tu_contraseña>
 ```
 
-### 1.8 Servicio systemd
+> La carpeta del servidor está en `Program Files (x86)`. Para editar archivos allí, abre el editor o PowerShell como Administrador.
 
-```bash
-sudo tee /etc/systemd/system/assetto-corsa.service > /dev/null <<EOF
-[Unit]
-Description=Assetto Corsa Dedicated Server
-After=network-online.target tailscaled.service
-Wants=network-online.target
+## 2. Ejecución del asistente
 
-[Service]
-User=$USER
-WorkingDirectory=$HOME/assetto-server
-ExecStart=$HOME/assetto-server/acServer
-Restart=on-failure
-RestartSec=5
+### 2.1 Ejecutar
 
-[Install]
-WantedBy=multi-user.target
-EOF
+Desde **PowerShell como Administrador** (necesario para escribir en `Program Files (x86)`):
 
-sudo systemctl daemon-reload
-sudo systemctl enable assetto-corsa.service
+```powershell
+cd "$env:USERPROFILE\Tools\ACDS-WSL"
+uv run ac_config.py
 ```
 
-El servicio se inicia al ejecutar el asistente por primera vez (sección 2), cuando ya existe contenido y configuración válida.
+En la primera ejecución `uv` instala las dependencias (`questionary`) automáticamente.
 
-## 2. Instalación del asistente de configuración
+### 2.2 Gestión del proceso
 
-### 2.1 Instalar uv
+El script gestiona `acServer.exe` sin servicios de Windows:
 
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-exec $SHELL -l
+1. **Detención:** localiza los procesos de `acServer.exe` de la carpeta del servidor (`Get-Process`, filtrando por ruta) y los termina con `taskkill /PID <pid> /T /F`.
+2. **Escritura:** guarda `server_cfg.ini` y `entry_list.ini`.
+3. **Inicio:** lanza `acServer.exe` en una **nueva consola** con `subprocess.Popen`, incluso si la escritura falló.
+
+Para detener el servidor manualmente, cierra la consola de `acServer.exe` o ejecuta:
+
+```powershell
+taskkill /IM acServer.exe /T /F
 ```
 
-### 2.2 Clonar el repositorio
+El servidor **no se reinicia con Windows**: se inicia al ejecutar el asistente, o manualmente ejecutando `acServer.exe` desde su carpeta.
 
-```bash
-git clone https://github.com/Athirtro/ACDS-WSL/ ~/assetto-server
+### 2.3 Verificar el servidor
+
+En la consola de `acServer.exe` deben aparecer `Found car CAR_0` y `PAGE OK`. Comprueba además que el proceso está activo:
+
+```powershell
+Get-Process acServer
 ```
 
-Actualizar en el futuro:
-
-```bash
-git -C ~/assetto-server pull
-```
-**TODO: comando pendiente de revisión.**
-
-### 2.3 Ejecutar
-
-```bash
-uv run ~/assetto-server/ac_config.py
-```
-
-`uv` instala las dependencias (`questionary`) automáticamente en la primera ejecución.
-
-### 2.4 Verificar el servidor
-
-```bash
-systemctl status assetto-corsa.service --no-pager
-sudo journalctl -u assetto-corsa.service -n 25 --no-pager
-```
-
-Debe aparecer `Found car CAR_0` y `PAGE OK`, y el servicio habilitado y activo.
-
-### 2.5 Conexión de jugadores
+### 2.4 Conexión de jugadores
 
 - Content Manager: IP de Tailscale del servidor, puerto 9600.
 - Enlace directo: `acmanager://race/online/join?ip=<ip-tailscale>&httpPort=8081`
 
-Revisa la consola de TailScale para asegurarte de la IP para reemplazar por `<ip-tailscale>`.
+Obtén `<ip-tailscale>` con `tailscale ip -4` o desde la consola de administración de Tailscale.
 
-### 2.6 Argumentos
+### 2.5 Argumentos
 
 | Argumento | Descripción | Por defecto |
 |---|---|---|
-| `--root` | Carpeta del servidor | carpeta del script |
-| `--source` | `content/` del juego en Windows | `/mnt/c/Program Files (x86)/Steam/steamapps/common/assettocorsa/content` |
-| `--service` | Nombre del servicio systemd | `assetto-corsa.service` |
-| `--no-service` | No detiene ni inicia el servicio | desactivado |
-| `--no-sync` | Omite la sincronización de contenido | desactivado |
-| `--mirror` | Borra en el destino lo que ya no exista en el origen | desactivado |
+| `--root` | Carpeta raíz del servidor (contiene `acServer.exe`, `cfg\` y `content\`) | `C:\Program Files (x86)\Steam\steamapps\common\Assetto Corsa Dedicated Server` |
+| `--exe` | Nombre del ejecutable del servidor | `acServer.exe` |
+| `--no-service` | No detiene ni inicia el proceso del servidor | desactivado |
+
+Ejemplo con otra ubicación:
+
+```powershell
+uv run ac_config.py --root "D:\SteamLibrary\steamapps\common\Assetto Corsa Dedicated Server"
+```
 
 ## 3. Capacidades actuales
 
-**Sincronización de contenido**
-- Copia `content/` desde Windows con `rsync`, excluyendo modelos `*.kn5`.
-- Muestra progreso en vivo, tiempo total y carpetas actualizadas.
-- Si el origen no está disponible, continúa con el contenido existente.
-
 **Escaneo y selección**
+- Lee el contenido directamente desde `<root>\content`.
 - Detecta pistas válidas y sus layouts.
 - Detecta coches válidos y sus liveries (lee `ui_skin.json` para mostrar el nombre).
 - Carga la configuración actual como valores por defecto.
@@ -199,14 +169,16 @@ Revisa la consola de TailScale para asegurarte de la IP para reemplazar por `<ip
 - Asignación de coches: el mismo para todos o uno por slot.
 - Asignación de liveries.
 
-**Escritura y servicio**
+**Escritura y proceso**
 - Muestra un resumen y pide confirmación antes de guardar.
-- Detiene el servicio, escribe la configuración y lo vuelve a iniciar, incluso si la escritura falla.
-- Genera `entry_list.ini` desde `[CAR_0]`.
+- Detiene `acServer.exe`, escribe la configuración y lo vuelve a iniciar, incluso si la escritura falla.
+- Genera `entry_list.ini` con una sección `[CAR_n]` por slot.
 - Escribe `CARS=` separado por `;` y ajusta `MAX_CLIENTS` al número de slots.
 - Crea copias de seguridad `server_cfg.ini.bak` y `entry_list.ini.bak` antes de sobrescribir.
+- Si no hay permisos de escritura, informa y termina con código 3 (ejecuta PowerShell como Administrador).
 
-### Cosas por hacer:
+### Cosas por hacer
+
 1. Soporte para omitir sesiones de práctica y qualify.
 2. Soporte para el ajuste de hora.
 3. Soporte para el ajuste del clima.
@@ -219,16 +191,19 @@ Revisa la consola de TailScale para asegurarte de la IP para reemplazar por `<ip
 10. Plantillas de sesión: Práctica, Hotlap, Race, Track Day y Weekend.
 11. Presets de evento reutilizables (pista, coches, liveries, sesiones, clima y ayudas).
 12. Interfaz gráfica accesible mediante API local.
+13. Soporte futuro para otros sistemas operativos, especialmente basados en Linux.
 
 ## Dirección técnica
 
-El script actual es un MVP. El desarrollo continúa en este orden:
+El script actual es un MVP para Windows 11. El desarrollo continúa en este orden:
 
 1. **Refactor por reglas:** cada parámetro configurable (hora, clima, viento, ayudas, realismo, sesiones, etc.) se encapsula en su propia unidad de lógica, con su clave, sección del `.ini`, tipo, validación y valor por defecto. Añadir un parámetro nuevo no debe requerir modificar el resto del programa.
 2. **Separación MVC simplificado:**
    - Modelo: reglas, estado y repositorios (`.ini`, contenido, presets).
-   - Controlador: casos de uso (sincronizar, aplicar configuración, controlar el servicio).
+   - Controlador: casos de uso (aplicar configuración, controlar el proceso `acServer.exe`).
    - Vista: CLI como primera implementación, intercambiable.
+   - El control de procesos (`taskkill`, `subprocess`) queda aislado detrás de una interfaz para facilitar portar a otros sistemas operativos (ítem 13).
 3. **Funcionalidades:** completar la lista de tareas pendientes sobre la nueva arquitectura.
-4. **Interfaz web:** API sobre el controlador y UI web para usuarios que no dominen la consola. Se inicia solo cuando las funcionalidades estén completas.
-5. **Instaladores:** scripts de un solo comando que descarguen el repositorio y preparen la infraestructura (distro, systemd, Tailscale, servidor dedicado, servicio y asistente).
+4. **Presets de evento:** pista, coches, liveries, sesiones, clima y ayudas reutilizables.
+5. **Interfaz web:** API local sobre el controlador y UI web para usuarios que no dominen la consola. Se inicia solo cuando las funcionalidades estén completas.
+6. **Instalador:** script de PowerShell de un solo comando que instale Chocolatey, `git` y `uv`, clone el repositorio en `~\Tools\ACDS-WSL`, configure el firewall y deje listo el asistente.
