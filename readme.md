@@ -163,8 +163,9 @@ uv run ac_config.py --root "D:\SteamLibrary\steamapps\common\Assetto Corsa Dedic
 
 **Parámetros configurables**
 - Pista y layout.
-- Duración de práctica y qualify (minutos, mínimo 1).
-- Duración de carrera (vueltas).
+- Sesiones a ejecutar: práctica, qualify y carrera, en cualquier combinación (al menos una). *(En desarrollo, pendiente de pruebas)*
+- Duración de práctica y qualify (minutos, mínimo 1). Por defecto: 20 y 15 minutos.
+- Carrera por vueltas (por defecto 10) o por tiempo en minutos. *(En desarrollo, pendiente de pruebas)*
 - Número de slots (solo jugadores humanos, sin IA).
 - Asignación de coches: el mismo para todos o uno por slot.
 - Asignación de liveries.
@@ -172,6 +173,7 @@ uv run ac_config.py --root "D:\SteamLibrary\steamapps\common\Assetto Corsa Dedic
 **Escritura y proceso**
 - Muestra un resumen y pide confirmación antes de guardar.
 - Detiene `acServer.exe`, escribe la configuración y lo vuelve a iniciar, incluso si la escritura falla.
+- Las sesiones omitidas se eliminan de `server_cfg.ini` (el servidor solo ejecuta las secciones presentes); las activas conservan sus claves existentes (`IS_OPEN`, `WAIT_TIME`, etc.). *(En desarrollo, pendiente de pruebas)*
 - Genera `entry_list.ini` con una sección `[CAR_n]` por slot.
 - Escribe `CARS=` separado por `;` y ajusta `MAX_CLIENTS` al número de slots.
 - Crea copias de seguridad `server_cfg.ini.bak` y `entry_list.ini.bak` antes de sobrescribir.
@@ -179,7 +181,7 @@ uv run ac_config.py --root "D:\SteamLibrary\steamapps\common\Assetto Corsa Dedic
 
 ### Cosas por hacer
 
-1. Soporte para omitir sesiones de práctica y qualify.
+1. Soporte para configurar libremente las sesiones (práctica, qualify y carrera): omitirlas, combinarlas y ajustar su duración. **En desarrollo, pendiente de pruebas.**
 2. Soporte para el ajuste de hora.
 3. Soporte para el ajuste del clima.
 4. Soporte para el ajuste de temperatura ambiente y del asfalto.

@@ -21,6 +21,11 @@ import questionary
 ACDS_ROOT = Path(r"C:\Program Files (x86)\Steam\steamapps\common\Assetto Corsa Dedicated Server")
 ACDS_EXE = "acServer.exe"
 
+DEFAULT_PRACTICE = 20
+DEFAULT_QUALIFY = 15
+DEFAULT_RACE_LAPS = 10
+DEFAULT_RACE_MINUTES = 30
+
 
 # ───────────────────────────── Dominio ─────────────────────────────
 
@@ -46,13 +51,24 @@ class Slot:
     skin: str = ""
 
 
+SESSION_SECTIONS = ("PRACTICE", "QUALIFY", "RACE")  # orden de ejecución en el servidor
+
+
+@dataclass(frozen=True)
+class Race:
+    by_laps: bool = True
+    value: int = DEFAULT_RACE_LAPS
+
+
 @dataclass
 class State:
+    """Sesiones: None = omitida (su sección no se escribe en server_cfg.ini)."""
+
     track: str = ""
     layout: str = ""
-    practice: int = 20
-    qualify: int = 10
-    race_laps: int = 10
+    practice: int | None = DEFAULT_PRACTICE
+    qualify: int | None = DEFAULT_QUALIFY
+    race: Race | None = field(default_factory=Race)
     slots: list[Slot] = field(default_factory=list)
 
     @classmethod
@@ -65,6 +81,19 @@ class State:
             suffix = section.split("_", 1)[1]
             return int(suffix) if suffix.isdigit() else 0
 
+        def timed(section: str, default: int) -> int | None:
+            return num(section, "TIME", default) if server.has_section(section) else None
+
+        def race() -> Race | None:
+            if not server.has_section("RACE"):
+                return None
+            minutes = num("RACE", "TIME", 0)
+            if minutes > 0:
+                return Race(False, minutes)
+            return Race(True, num("RACE", "LAPS", 0) or DEFAULT_RACE_LAPS)
+
+        has_sessions = any(server.has_section(s) for s in SESSION_SECTIONS)
+
         slots = [
             Slot(entries.get(sec, "MODEL"), entries.get(sec, "SKIN"))
             for sec in sorted(
@@ -73,13 +102,20 @@ class State:
             )
             if entries.get(sec, "MODEL")
         ]
+        sessions = (
+            {
+                "practice": timed("PRACTICE", DEFAULT_PRACTICE),
+                "qualify": timed("QUALIFY", DEFAULT_QUALIFY),
+                "race": race(),
+            }
+            if has_sessions
+            else {}
+        )
         return cls(
             track=server.get("SERVER", "TRACK"),
             layout=server.get("SERVER", "CONFIG_TRACK"),
-            practice=num("PRACTICE", "TIME", 20),
-            qualify=num("QUALIFY", "TIME", 10),
-            race_laps=num("RACE", "LAPS", 10),
             slots=slots,
+            **sessions,
         )
 
 
@@ -137,6 +173,15 @@ class IniFile:
     def sections(self) -> list[str]:
         return self._cp.sections()
 
+    def has_section(self, section: str) -> bool:
+        return self._cp.has_section(section)
+
+    def items(self, section: str) -> dict[str, str]:
+        return dict(self._cp.items(section)) if self._cp.has_section(section) else {}
+
+    def remove_section(self, section: str) -> None:
+        self._cp.remove_section(section)
+
     def get(self, section: str, key: str, default: str = "") -> str:
         return self._cp.get(section, key, fallback=default).strip()
 
@@ -165,9 +210,7 @@ class ConfigWriter:
         server.set("SERVER", "CONFIG_TRACK", s.layout)
         server.set("SERVER", "CARS", ";".join(dict.fromkeys(slot.model for slot in s.slots)))
         server.set("SERVER", "MAX_CLIENTS", len(s.slots))
-        server.set("PRACTICE", "TIME", s.practice)
-        server.set("QUALIFY", "TIME", s.qualify)
-        server.set("RACE", "LAPS", s.race_laps)
+        self._apply_sessions(server, s)
         server.save()
 
         entries = IniFile(self.cfg_dir / "entry_list.ini", fresh=True)
@@ -182,6 +225,36 @@ class ConfigWriter:
             entries.set(sec, "BALLAST", 0)
             entries.set(sec, "RESTRICTOR", 0)
         entries.save()
+
+    @staticmethod
+    def _apply_sessions(server: IniFile, s: State) -> None:
+        defaults = {
+            "PRACTICE": {"NAME": "Practice", "IS_OPEN": "1"},
+            "QUALIFY": {"NAME": "Qualify", "IS_OPEN": "1"},
+            "RACE": {"NAME": "Race", "WAIT_TIME": "60", "IS_OPEN": "2"},
+        }
+        overrides: dict[str, dict[str, object] | None] = {
+            "PRACTICE": {"TIME": s.practice} if s.practice is not None else None,
+            "QUALIFY": {"TIME": s.qualify} if s.qualify is not None else None,
+            "RACE": (
+                {"LAPS": s.race.value, "TIME": 0}
+                if s.race and s.race.by_laps
+                else {"LAPS": 0, "TIME": s.race.value}
+                if s.race
+                else None
+            ),
+        }
+        # Se conservan los valores existentes (IS_OPEN, WAIT_TIME, ...) y se reescriben
+        # las secciones activas en orden; las omitidas se eliminan del archivo.
+        saved = {sec: server.items(sec) for sec in SESSION_SECTIONS}
+        for sec in SESSION_SECTIONS:
+            server.remove_section(sec)
+        for sec in SESSION_SECTIONS:
+            override = overrides[sec]
+            if override is None:
+                continue
+            for key, value in {**defaults[sec], **saved[sec], **override}.items():
+                server.set(sec, key, value)
 
 
 # ───────────────────────────── Proceso ACDS ─────────────────────────────
@@ -302,12 +375,50 @@ class TrackStep(Step):
         )
 
 
-class DurationStep(Step):
+class SessionsStep(Step):
+    PRACTICE = "Práctica"
+    QUALIFY = "Qualify"
+    RACE = "Carrera"
+    BY_LAPS = "Por vueltas"
+    BY_TIME = "Por tiempo"
+
     def run(self, ctx: Context) -> None:
         s = ctx.state
-        s.practice = ask_int("Duración de práctica (minutos)", s.practice)
-        s.qualify = ask_int("Duración de qualify (minutos)", s.qualify)
-        s.race_laps = ask_int("Duración de carrera (vueltas)", s.race_laps)
+        chosen = ask(
+            questionary.checkbox(
+                "Sesiones a ejecutar (espacio para marcar/desmarcar)",
+                choices=[
+                    questionary.Choice(self.PRACTICE, checked=s.practice is not None),
+                    questionary.Choice(self.QUALIFY, checked=s.qualify is not None),
+                    questionary.Choice(self.RACE, checked=s.race is not None),
+                ],
+                validate=lambda v: bool(v) or "Selecciona al menos una sesión",
+            )
+        )
+
+        s.practice = (
+            ask_int("Duración de práctica (minutos)", s.practice or DEFAULT_PRACTICE)
+            if self.PRACTICE in chosen
+            else None
+        )
+        s.qualify = (
+            ask_int("Duración de qualify (minutos)", s.qualify or DEFAULT_QUALIFY)
+            if self.QUALIFY in chosen
+            else None
+        )
+        s.race = self._race(s.race) if self.RACE in chosen else None
+
+    def _race(self, previous: Race | None) -> Race:
+        by_laps = previous.by_laps if previous else True
+        mode = ask_choice(
+            "Modo de carrera", [self.BY_LAPS, self.BY_TIME], self.BY_LAPS if by_laps else self.BY_TIME
+        )
+        by_laps = mode == self.BY_LAPS
+        if by_laps:
+            default = previous.value if previous and previous.by_laps else DEFAULT_RACE_LAPS
+            return Race(True, ask_int("Duración de carrera (vueltas)", default))
+        default = previous.value if previous and not previous.by_laps else DEFAULT_RACE_MINUTES
+        return Race(False, ask_int("Duración de carrera (minutos)", default))
 
 
 class SlotsStep(Step):
@@ -376,15 +487,21 @@ class ConfirmStep(Step):
         s = ctx.state
         print(
             f"\nPista:     {s.track}{'/' + s.layout if s.layout else ''}"
-            f"\nPráctica:  {s.practice} min"
-            f"\nQualify:   {s.qualify} min"
-            f"\nCarrera:   {s.race_laps} vueltas"
+            f"\nPráctica:  {f'{s.practice} min' if s.practice is not None else 'omitida'}"
+            f"\nQualify:   {f'{s.qualify} min' if s.qualify is not None else 'omitida'}"
+            f"\nCarrera:   {self._race_label(s.race)}"
             f"\nSlots:     {len(s.slots)}"
         )
         for i, slot in enumerate(s.slots):
             print(f"  CAR_{i}: {slot.model} · {slot.skin or 'livery libre'}")
         if not ask(questionary.confirm("¿Guardar cambios?", default=True)):
             raise Cancelled
+
+    @staticmethod
+    def _race_label(race: Race | None) -> str:
+        if race is None:
+            return "omitida"
+        return f"{race.value} vueltas" if race.by_laps else f"{race.value} min"
 
 
 class Wizard:
@@ -422,7 +539,7 @@ def main() -> int:
     )
     ctx = Context(ContentScanner(content), state)
 
-    wizard = Wizard([TrackStep(), DurationStep(), SlotsStep(), ConfirmStep()])
+    wizard = Wizard([TrackStep(), SessionsStep(), SlotsStep(), ConfirmStep()])
     try:
         wizard.run(ctx)
     except Cancelled:
