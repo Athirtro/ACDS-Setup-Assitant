@@ -169,15 +169,23 @@ uv run ac_config.py --root "D:\SteamLibrary\steamapps\common\Assetto Corsa Dedic
 - Overtime de qualify (`QUALIFY_MAX_WAIT_PERC`): porcentaje de la mejor vuelta de la sesión que se concede para terminar la vuelta en curso al acabarse el tiempo. Por defecto: 120.
 - Tiempo de cierre de carrera (`RACE_OVER_TIME`): segundos que tienen los demás pilotos para terminar tras cruzar el líder. Por defecto: 180.
 - Vuelta extra en carreras por tiempo (`RACE_EXTRA_LAP`). Por defecto: desactivada.
+- Hora de inicio (formato 24 h, `HH:MM`, por defecto 14:00) y multiplicador del paso del tiempo (entero, por defecto 1). **En desarrollo, soporte parcial** (ver más abajo).
 - Número de slots (solo jugadores humanos, sin IA).
 - Asignación de coches: el mismo para todos o uno por slot.
 - Asignación de liveries.
 
 > La práctica no tiene overtime: el servidor la termina exactamente al cumplirse su duración.
 
+**Hora y paso del tiempo (en desarrollo, soporte parcial)**
+- La hora se escribe en `SUN_ANGLE` (`[SERVER]`) con la relación `16° por hora, 13:00 = 0°`, y el multiplicador en `TIME_OF_DAY_MULT`.
+- **Rango de hora soportado:** de **06:00 a 18:00**, verificado en pruebas. Fuera de ese rango (horarios nocturnos) el reloj se queda fijo en las 18:00, porque `acServer.exe` vainilla no admite horas nocturnas mediante `SUN_ANGLE`.
+- **Multiplicador del paso del tiempo:** **no funciona correctamente**; el tiempo transcurre siempre con multiplicador 1, sea cual sea el valor configurado.
+- Las jornadas nocturnas y el multiplicador requieren WeatherFX de CSP (el tiempo se codifica en `GRAPHICS` de `[WEATHER_n]`, con `_type`, `_time`, `_mult` y `_start`). El script ya intenta escribirlo, pero aún no produce el resultado esperado en Content Manager con CSP. Se investiga el formato exacto que genera Content Manager para reproducirlo.
+- Con WeatherFX, cada sesión reinicia la hora a la de inicio configurada (el tiempo no es continuo entre sesiones).
+
 **Escritura y proceso**
 - Muestra un resumen y pide confirmación antes de guardar.
-- Detiene `acServer.exe`, escribe la configuración y lo vuelve a iniciar, incluso si la escritura falla.
+- Detiene `acServer.exe`, escribe la configuración y lo vuelve a iniciar, incluso si la escritura falló.
 - Las sesiones omitidas se eliminan de `server_cfg.ini` (el servidor solo ejecuta las secciones presentes); las activas conservan sus claves existentes (`WAIT_TIME`, etc.).
 - Las secciones de sesión se escriben en orden (`[PRACTICE]`, `[QUALIFY]`, `[RACE]`) inmediatamente después de `[SERVER]`.
 - En carreras por vueltas solo se escribe `LAPS`, y en carreras por tiempo solo `TIME`; nunca ambas.
@@ -190,7 +198,7 @@ uv run ac_config.py --root "D:\SteamLibrary\steamapps\common\Assetto Corsa Dedic
 ### Cosas por hacer
 
 1. Soporte para configurar libremente las sesiones (práctica, qualify y carrera): omitirlas, combinarlas y ajustar su duración y overtime. **Completada.**
-2. Soporte para el ajuste de hora.
+2. Soporte para el ajuste de hora y del paso del tiempo. **En desarrollo, soporte parcial:** hora funcional de 06:00 a 18:00; pendientes las jornadas nocturnas y el multiplicador de tiempo.
 3. Soporte para el ajuste del clima.
 4. Soporte para el ajuste de temperatura ambiente y del asfalto.
 5. Soporte para el ajuste del viento.
