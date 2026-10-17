@@ -16,6 +16,8 @@ from .model import (
     DEFAULT_RACE_LAPS,
     DEFAULT_RACE_MINUTES,
     MIN_OVERTIME,
+    MAX_DAMAGE,
+    MIN_RATE,
     Race,
     Slot,
     State,
@@ -39,16 +41,15 @@ def ask(question: questionary.Question):
     return answer
 
 
-def ask_int(message: str, default: int, minimum: int = 1) -> int:
-    return int(
-        ask(
-            questionary.text(
-                message,
-                default=str(default),
-                validate=lambda v: (v.isdigit() and int(v) >= minimum) or f"Entero >= {minimum}",
-            )
-        )
-    )
+def ask_int(message: str, default: int, minimum: int = 1, maximum: int | None = None) -> int:
+    def check(value: str) -> bool | str:
+        if not value.isdigit() or int(value) < minimum:
+            return f"Entero >= {minimum}"
+        if maximum is not None and int(value) > maximum:
+            return f"Entero <= {maximum}"
+        return True
+
+    return int(ask(questionary.text(message, default=str(default), validate=check)))
 
 
 def ask_select(message: str, options: Sequence[Option], default: str | None = None) -> str:
@@ -72,6 +73,12 @@ def assists_label(s: State) -> str:
 
 def ask_choice(message: str, choices: Sequence[str], default: str | None = None) -> str:
     return ask_select(message, [(c, c) for c in choices], default)
+
+def realism_label(s: State) -> str:
+    return (
+        f"neumáticos={s.tyre_wear_rate}% · combustible={s.fuel_rate}% · "
+        f"daños={s.damage_multiplier}% · mantas térmicas={'sí' if s.tyre_blankets else 'no'}"
+    )
 
 
 @dataclass
@@ -205,6 +212,26 @@ class AssistsStep(Step):
         options = [(f"{value} — {label}", value) for value, label in self.LEVELS]
         return int(ask_select(name, options, str(current)))
 
+class RealismStep(Step):
+    """Opcional: si no se configura, se conservan los valores actuales."""
+
+    def run(self, ctx: Context) -> None:
+        s = ctx.state
+        if not ask(questionary.confirm(f"¿Configurar realismo? (actual: {realism_label(s)})", default=False)):
+            return
+        s.tyre_wear_rate = ask_int(
+            "Desgaste de neumáticos (% · 0 = sin desgaste, 100 = realista)", s.tyre_wear_rate, minimum=MIN_RATE
+        )
+        s.fuel_rate = ask_int(
+            "Consumo de combustible (% · 0 = sin consumo, 100 = realista)", s.fuel_rate, minimum=MIN_RATE
+        )
+        s.damage_multiplier = ask_int(
+            "Daños (% · 0 = sin daños, 100 = completos)", s.damage_multiplier, minimum=0, maximum=MAX_DAMAGE
+        )
+        s.tyre_blankets = ask(
+            questionary.confirm("¿Permitir mantas térmicas (neumáticos calientes al inicio)?", default=s.tyre_blankets)
+        )
+
 class SlotsStep(Step):
     SAME_CAR = "Mismo coche para todos"
     EACH_CAR = "Un coche por slot"
@@ -279,6 +306,7 @@ class ConfirmStep(Step):
             f"\nSlots:     {len(s.slots)}"
             f"\nHora:      {format_time(s.time_minutes)} (x{s.time_mult})"
             f"\nAyudas:    {assists_label(s)}"
+            f"\nRealismo:  {realism_label(s)}"
         )
         for i, slot in enumerate(s.slots):
             print(f"  CAR_{i}: {slot.model} · {slot.skin or 'livery libre'}")

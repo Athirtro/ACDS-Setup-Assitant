@@ -29,6 +29,12 @@ from .model import (
     DEFAULT_AUTOCLUTCH,
     DEFAULT_STABILITY,
     DEFAULT_TC_MODE,
+    DEFAULT_DAMAGE_MULTIPLIER,
+    DEFAULT_FUEL_RATE,
+    DEFAULT_TYRE_BLANKETS,
+    DEFAULT_TYRE_WEAR_RATE,
+    MAX_DAMAGE,
+    MIN_RATE,
     Bundle,
     Document,
     Race,
@@ -342,6 +348,41 @@ class AssistsFeature(Feature):
             Contribution.put(SERVER, "SERVER", "AUTOCLUTCH_ALLOWED", int(state.autoclutch)),
         ]
 
+class RealismFeature(Feature):
+    id = "realism"
+    owns = (
+        "server:SERVER:TYRE_WEAR_RATE",
+        "server:SERVER:FUEL_RATE",
+        "server:SERVER:DAMAGE_MULTIPLIER",
+        "server:SERVER:TYRE_BLANKETS_ALLOWED",
+    )
+
+    def load(self, state: State, server: Document, entries: Document) -> None:
+        state.tyre_wear_rate = _num(server, "SERVER", "TYRE_WEAR_RATE", DEFAULT_TYRE_WEAR_RATE)
+        state.fuel_rate = _num(server, "SERVER", "FUEL_RATE", DEFAULT_FUEL_RATE)
+        damage = _num(server, "SERVER", "DAMAGE_MULTIPLIER", DEFAULT_DAMAGE_MULTIPLIER)
+        state.damage_multiplier = damage if damage <= MAX_DAMAGE else DEFAULT_DAMAGE_MULTIPLIER
+        raw = server.get("SERVER", "TYRE_BLANKETS_ALLOWED")
+        state.tyre_blankets = DEFAULT_TYRE_BLANKETS if raw not in ("0", "1") else raw == "1"
+
+    def validate(self, state: State) -> list[Violation]:
+        out: list[Violation] = []
+        if state.tyre_wear_rate < MIN_RATE:
+            out.append(Violation("desgaste de neumáticos", f"Mínimo {MIN_RATE}"))
+        if state.fuel_rate < MIN_RATE:
+            out.append(Violation("consumo de combustible", f"Mínimo {MIN_RATE}"))
+        if not 0 <= state.damage_multiplier <= MAX_DAMAGE:
+            out.append(Violation("daños", f"Debe estar entre 0 y {MAX_DAMAGE}"))
+        return out
+
+    def project(self, state: State, base: Document) -> list[Contribution]:
+        return [
+            Contribution.put(SERVER, "SERVER", "TYRE_WEAR_RATE", state.tyre_wear_rate),
+            Contribution.put(SERVER, "SERVER", "FUEL_RATE", state.fuel_rate),
+            Contribution.put(SERVER, "SERVER", "DAMAGE_MULTIPLIER", state.damage_multiplier),
+            Contribution.put(SERVER, "SERVER", "TYRE_BLANKETS_ALLOWED", int(state.tyre_blankets)),
+        ]
+
 
 class SlotsFeature(Feature):
     id = "slots"
@@ -396,8 +437,8 @@ class SlotsFeature(Feature):
 def default_features(clock: Callable[[], int] = today_unix) -> list[Feature]:
     """Orden explícito de las features (coincide con el orden del asistente)."""
     return [
-        TrackFeature(), SessionsFeature(), OvertimeFeature(),
-        TimeFeature(clock), AssistsFeature(), SlotsFeature(),
+        TrackFeature(), SessionsFeature(), OvertimeFeature(), TimeFeature(clock),
+        AssistsFeature(), RealismFeature(), SlotsFeature(),
     ]
 
 

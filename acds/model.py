@@ -18,6 +18,8 @@ DEFAULT_TIME_MINUTES = 14 * 60  # 14:00 (SUN_ANGLE=16, valor por defecto de Kuno
 DEFAULT_TIME_MULT = 1
 
 ASSIST_MODES = (0, 1, 2)
+MIN_RATE = 0
+MAX_DAMAGE = 100
 MIN_DURATION = 1
 MIN_OVERTIME = 0
 MINUTES_PER_DAY = 24 * 60
@@ -30,6 +32,10 @@ DEFAULT_TC_MODE = 1  # ídem ABS
 DEFAULT_STABILITY = False
 DEFAULT_AUTOCLUTCH = False
 
+DEFAULT_TYRE_WEAR_RATE = 100  # % (0 = sin desgaste, 100 = realista)
+DEFAULT_FUEL_RATE = 100  # % (0 = sin consumo, 100 = realista)
+DEFAULT_DAMAGE_MULTIPLIER = 100  # % (0 = sin daños, 100 = completos)
+DEFAULT_TYRE_BLANKETS = False
 
 # ───────────────────────────── Reglas puras ─────────────────────────────
 
@@ -109,6 +115,10 @@ class State:
     tc_mode: int = DEFAULT_TC_MODE
     stability: bool = DEFAULT_STABILITY
     autoclutch: bool = DEFAULT_AUTOCLUTCH
+    tyre_wear_rate: int = DEFAULT_TYRE_WEAR_RATE
+    fuel_rate: int = DEFAULT_FUEL_RATE
+    damage_multiplier: int = DEFAULT_DAMAGE_MULTIPLIER
+    tyre_blankets: bool = DEFAULT_TYRE_BLANKETS
 
     @property
     def runs_practice(self) -> bool:

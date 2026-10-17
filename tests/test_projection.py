@@ -133,6 +133,25 @@ def test_assists_defaults_when_keys_are_missing():
 def test_invalid_assist_mode_is_rejected():
     assert any(v.field == "ABS" for v in validate_state(FEATURES, make_state(abs_mode=5)))
 
+# ───────────────────────────── Realism ─────────────────────────────
+
+def test_realism_projection():
+    state = make_state(tyre_wear_rate=250, fuel_rate=0, damage_multiplier=40, tyre_blankets=True)
+    server = build(FEATURES, state, base_server()).server
+    assert server.get("SERVER", "TYRE_WEAR_RATE") == "250"
+    assert server.get("SERVER", "FUEL_RATE") == "0"
+    assert server.get("SERVER", "DAMAGE_MULTIPLIER") == "40"
+    assert server.get("SERVER", "TYRE_BLANKETS_ALLOWED") == "1"
+
+
+def test_realism_defaults_when_keys_are_missing():
+    state = load_state(FEATURES, Document({"SERVER": {}}), Document())
+    assert (state.tyre_wear_rate, state.fuel_rate, state.damage_multiplier, state.tyre_blankets) == (100, 100, 100, False)
+
+
+def test_invalid_damage_is_rejected():
+    assert any(v.field == "daños" for v in validate_state(FEATURES, make_state(damage_multiplier=150)))
+
 # ───────────────────────────── Slots ─────────────────────────────
 
 def test_slots_projection():
