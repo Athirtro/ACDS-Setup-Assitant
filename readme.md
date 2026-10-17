@@ -206,7 +206,8 @@ uv run ac_config.py --root "D:\SteamLibrary\steamapps\common\Assetto Corsa Dedic
 5. Soporte para el ajuste del viento.
 6. Soporte para el ajuste de condición del circuito.
 7. Soporte para el ajuste de ayudas (ABS, control de tracción, control de estabilidad, embrague automático). **En desarrollo:** implementado y probado.
-8. Soporte para el ajuste de realismo: desgaste de neumáticos, consumo de combustible, daños y mantas térmicas. **En desarrollo:** implementado y probado a nivel de archivo; pendiente de verificar en el servidor con Content Manager.9. Soporte para el ajuste completo de parámetros del servidor.
+8. Soporte para el ajuste de realismo: desgaste de neumáticos, consumo de combustible, daños y mantas térmicas. **En desarrollo:** implementado y probado a nivel de archivo; pendiente de verificar en el servidor con Content Manager.
+9. Soporte para el ajuste completo de parámetros del servidor.
 10. Plantillas de sesión: Práctica, Hotlap, Race, Track Day y Weekend.
 11. Presets de evento reutilizables (pista, coches, liveries, sesiones, clima y ayudas).
 12. Interfaz gráfica accesible mediante API local.
