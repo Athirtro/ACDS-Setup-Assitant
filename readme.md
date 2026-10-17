@@ -173,8 +173,8 @@ uv run ac_config.py --root "D:\SteamLibrary\steamapps\common\Assetto Corsa Dedic
 - Número de slots (solo jugadores humanos, sin IA).
 - Asignación de coches: el mismo para todos o uno por slot.
 - Asignación de liveries.
-- Ayudas (opcional; por defecto se conservan los valores actuales): ABS y control de tracción (0 = prohibido, 1 = solo coches que lo incluyen, 2 = todos), control de estabilidad y embrague automático (sí/no).
-- Realismo (opcional; por defecto se conservan los valores actuales): desgaste de neumáticos y consumo de combustible (% sin límite superior, 0 = desactivado, 100 = realista), daños (0–100 %) y mantas térmicas (sí/no). **En desarrollo** (pendiente de prueba con el servidor real).
+- Ayudas (opcional; por defecto se conservan los valores actuales): ABS y control de tracción (0 = prohibido, 1 = solo coches que lo incluyen, 2 = todos), control de estabilidad (0–100 %) y embrague automático (sí/no). **En desarrollo** (pendiente de prueba con el servidor real).
+- Realismo (opcional; por defecto se conservan los valores actuales): desgaste de neumáticos y consumo de combustible (0–500 %, 100 = realista), daños (0–100 %), mantas térmicas (sí/no) y rebufo (0–1000 %, 100 = normal). El rebufo es una opción de CSP que se publica en el mensaje de bienvenida (`cfg/welcome.txt`); requiere clientes con CSP 0.1.79 o superior. **En desarrollo** (pendiente de prueba con el servidor real).
 
 > La práctica no tiene overtime: el servidor la termina exactamente al cumplirse su duración.
 

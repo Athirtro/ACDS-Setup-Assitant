@@ -18,6 +18,9 @@ from .model import (
     MIN_OVERTIME,
     MAX_DAMAGE,
     MIN_RATE,
+    MAX_RATE,
+    MAX_SLIPSTREAM,
+    MAX_STABILITY,
     Race,
     Slot,
     State,
@@ -67,9 +70,8 @@ def ask_select(message: str, options: Sequence[Option], default: str | None = No
 def assists_label(s: State) -> str:
     return (
         f"ABS={s.abs_mode} · TC={s.tc_mode} · "
-        f"estabilidad={'sí' if s.stability else 'no'} · embrague auto={'sí' if s.autoclutch else 'no'}"
+        f"estabilidad={s.stability}% · embrague auto={'sí' if s.autoclutch else 'no'}"
     )
-
 
 def ask_choice(message: str, choices: Sequence[str], default: str | None = None) -> str:
     return ask_select(message, [(c, c) for c in choices], default)
@@ -77,7 +79,8 @@ def ask_choice(message: str, choices: Sequence[str], default: str | None = None)
 def realism_label(s: State) -> str:
     return (
         f"neumáticos={s.tyre_wear_rate}% · combustible={s.fuel_rate}% · "
-        f"daños={s.damage_multiplier}% · mantas térmicas={'sí' if s.tyre_blankets else 'no'}"
+        f"daños={s.damage_multiplier}% · mantas térmicas={'sí' if s.tyre_blankets else 'no'} · "
+        f"rebufo={s.slipstream}%"
     )
 
 
@@ -205,7 +208,12 @@ class AssistsStep(Step):
             return
         s.abs_mode = self._level("ABS", s.abs_mode)
         s.tc_mode = self._level("Control de tracción", s.tc_mode)
-        s.stability = ask(questionary.confirm("¿Permitir control de estabilidad?", default=s.stability))
+        s.stability = ask_int(
+            "Control de estabilidad (% · 0 = desactivado, 100 = máximo)",
+            s.stability,
+            minimum=0,
+            maximum=MAX_STABILITY,
+        )
         s.autoclutch = ask(questionary.confirm("¿Permitir embrague automático?", default=s.autoclutch))
 
     def _level(self, name: str, current: int) -> int:
@@ -220,16 +228,25 @@ class RealismStep(Step):
         if not ask(questionary.confirm(f"¿Configurar realismo? (actual: {realism_label(s)})", default=False)):
             return
         s.tyre_wear_rate = ask_int(
-            "Desgaste de neumáticos (% · 0 = sin desgaste, 100 = realista)", s.tyre_wear_rate, minimum=MIN_RATE
+            f"Desgaste de neumáticos (% · {MIN_RATE} = sin desgaste, {MAX_RATE} = realista)",
+            s.tyre_wear_rate,
+            minimum=MIN_RATE,
+            maximum=MAX_RATE,
         )
         s.fuel_rate = ask_int(
-            "Consumo de combustible (% · 0 = sin consumo, 100 = realista)", s.fuel_rate, minimum=MIN_RATE
+            f"Consumo de combustible (% · {MIN_RATE} = sin consumo, {MAX_RATE} = realista)",
+            s.fuel_rate,
+            minimum=MIN_RATE,
+            maximum=MAX_RATE,
         )
         s.damage_multiplier = ask_int(
-            "Daños (% · 0 = sin daños, 100 = completos)", s.damage_multiplier, minimum=0, maximum=MAX_DAMAGE
+            f"Daños (% · 0 = sin daños, {MAX_DAMAGE} = completos)", s.damage_multiplier, minimum=0, maximum=MAX_DAMAGE
         )
         s.tyre_blankets = ask(
             questionary.confirm("¿Permitir mantas térmicas (neumáticos calientes al inicio)?", default=s.tyre_blankets)
+        )
+        s.slipstream = ask_int(
+            f"Rebufo (% · 0 = sin efecto, {MAX_SLIPSTREAM} = normal)", s.slipstream, minimum=0, maximum=MAX_SLIPSTREAM
         )
 
 class SlotsStep(Step):
@@ -331,7 +348,10 @@ class Wizard:
 
 def default_wizard() -> Wizard:
     return Wizard(
-        [TrackStep(), SessionsStep(), OvertimeStep(), TimeStep(), AssistsStep(), SlotsStep(), ConfirmStep()]
+        [
+            TrackStep(), SessionsStep(), OvertimeStep(), TimeStep(),
+            AssistsStep(), RealismStep(), SlotsStep(), ConfirmStep(),
+        ]
     )
 
 

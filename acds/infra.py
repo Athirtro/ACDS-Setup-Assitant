@@ -4,18 +4,21 @@ Sin reglas de negocio: solo traducen entre el mundo exterior y los puertos de `s
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import configparser
 import json
 import os
 import shutil
 import subprocess
+import zlib
 from pathlib import Path
 from typing import Callable
-
-from .model import Bundle, Document, Skin, Track
+from .model import CSP_PREFIX, Bundle, Document, Skin, Track
 
 ACDS_EXE = "acServer.exe"
-
+DEFAULT_WELCOME = "cfg/welcome.txt"
+CSP_SEPARATOR = "\t" * 32 + "$CSP0:"  # oculta el bloque a quien no use CSP
 
 # ───────────────────────────── Archivos .ini ─────────────────────────────
 
@@ -54,18 +57,99 @@ class IniFile:
         finally:
             tmp.unlink(missing_ok=True)
 
+def _encode_csp(options: Document) -> str:
+    lines: list[str] = []
+    for section in options.sections():
+        lines.append(f"[{section}]")
+        lines += [f"{key} = {value}" for key, value in options.items(section).items()]
+        lines.append("")
+    payload = zlib.compress("\n".join(lines).encode("utf-8"), 6)
+    return base64.b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_csp(encoded: str) -> Document:
+    encoded = encoded.strip()
+    try:
+        raw = zlib.decompress(base64.b64decode(encoded + "=" * (-len(encoded) % 4)))
+        cp = configparser.ConfigParser(interpolation=None, strict=False, inline_comment_prefixes=(";",))
+        cp.optionxform = str  # type: ignore[assignment]
+        cp.read_string(raw.decode("utf-8-sig"))
+    except (binascii.Error, zlib.error, ValueError, configparser.Error):
+        return Document()
+    return Document({section: dict(cp.items(section)) for section in cp.sections()})
+
+
+def _split_csp(document: Document) -> tuple[Document, Document]:
+    """(server_cfg sin opciones de CSP, opciones de CSP sin prefijo)."""
+    plain, csp = Document(), Document()
+    for section in document.sections():
+        target, name = (csp, section[len(CSP_PREFIX):]) if section.startswith(CSP_PREFIX) else (plain, section)
+        for key, value in document.items(section).items():
+            target.set(name, key, value)
+    return plain, csp
+
 
 class IniConfigStore:
+    """server_cfg.ini + entry_list.ini + opciones extra de CSP.
+
+    Las opciones de CSP viajan ocultas en el mensaje de bienvenida (WELCOME_MESSAGE);
+    aquí se exponen como secciones con prefijo `CSP/` dentro del documento del servidor.
+    """
+
     def __init__(self, cfg_dir: Path) -> None:
+        self.root = cfg_dir.parent
         self.server_file = IniFile(cfg_dir / "server_cfg.ini")
         self.entries_file = IniFile(cfg_dir / "entry_list.ini")
 
     def read(self) -> tuple[Document, Document]:
-        return self.server_file.load(), self.entries_file.load()
+        server = self.server_file.load()
+        _, encoded = self._read_welcome(server.get("SERVER", "WELCOME_MESSAGE"))
+        csp = _decode_csp(encoded) if encoded else Document()
+        for section in csp.sections():
+            for key, value in csp.items(section).items():
+                server.set(f"{CSP_PREFIX}{section}", key, value)
+        return server, self.entries_file.load()
 
     def write(self, bundle: Bundle) -> None:
-        self.server_file.save(bundle.server)
+        plain, csp = _split_csp(bundle.server)
+        reference = plain.get("SERVER", "WELCOME_MESSAGE")
+        if csp.sections() and not reference:
+            reference = DEFAULT_WELCOME
+            plain.set("SERVER", "WELCOME_MESSAGE", reference)
+        self.server_file.save(plain)
         self.entries_file.save(bundle.entries)
+        if reference:
+            self._write_welcome(reference, csp)
+
+    def _welcome_path(self, reference: str) -> Path | None:
+        if not reference:
+            return None
+        path = Path(reference)
+        return path if path.is_absolute() else self.root / path
+
+    def _read_welcome(self, reference: str) -> tuple[str, str]:
+        """(texto visible, bloque CSP codificado)."""
+        path = self._welcome_path(reference)
+        if path is None or not path.is_file():
+            return "", ""
+        visible, separator, encoded = path.read_text(encoding="utf-8-sig").partition(CSP_SEPARATOR)
+        return visible, encoded if separator else ""
+
+    def _write_welcome(self, reference: str, csp: Document) -> None:
+        path = self._welcome_path(reference)
+        if path is None:
+            return
+        exists = path.is_file()
+        if not exists and not csp.sections():
+            return
+        visible, _ = self._read_welcome(reference)
+        text = visible + (CSP_SEPARATOR + _encode_csp(csp) if csp.sections() else "")
+        if exists and text == path.read_text(encoding="utf-8-sig"):
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if exists:
+            shutil.copy2(path, path.with_name(path.name + ".bak"))
+        path.write_text(text, encoding="utf-8", newline="")
 
 
 # ───────────────────────────── Contenido de Steam ─────────────────────────────

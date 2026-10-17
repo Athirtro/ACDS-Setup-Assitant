@@ -9,7 +9,6 @@ import argparse
 import os
 import sys
 from pathlib import Path
-
 from acds.cli import Cancelled, Context, default_wizard, report
 from acds.infra import ACDS_EXE, ContentScanner, IniConfigStore, NullProcess, ServerProcess
 from acds.service import ConfigService, Result

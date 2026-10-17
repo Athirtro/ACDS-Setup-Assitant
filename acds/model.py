@@ -19,7 +19,11 @@ DEFAULT_TIME_MULT = 1
 
 ASSIST_MODES = (0, 1, 2)
 MIN_RATE = 0
+MAX_RATE = 500
 MAX_DAMAGE = 100
+MAX_STABILITY = 100
+MAX_SLIPSTREAM = 1000
+CSP_PREFIX = "CSP/"  # secciones de opciones extra de CSP dentro del documento del servidor
 MIN_DURATION = 1
 MIN_OVERTIME = 0
 MINUTES_PER_DAY = 24 * 60
@@ -29,13 +33,14 @@ TIME_PATTERN = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)")
 
 DEFAULT_ABS_MODE = 1  # 0 = prohibido, 1 = solo coches que lo incluyen, 2 = todos
 DEFAULT_TC_MODE = 1  # ídem ABS
-DEFAULT_STABILITY = False
+DEFAULT_STABILITY = 0  # % (0-100)
 DEFAULT_AUTOCLUTCH = False
 
 DEFAULT_TYRE_WEAR_RATE = 100  # % (0 = sin desgaste, 100 = realista)
 DEFAULT_FUEL_RATE = 100  # % (0 = sin consumo, 100 = realista)
 DEFAULT_DAMAGE_MULTIPLIER = 100  # % (0 = sin daños, 100 = completos)
 DEFAULT_TYRE_BLANKETS = False
+DEFAULT_SLIPSTREAM = 100  # % (0-1000, 100 = normal)
 
 # ───────────────────────────── Reglas puras ─────────────────────────────
 
@@ -113,12 +118,13 @@ class State:
     time_mult: int = DEFAULT_TIME_MULT
     abs_mode: int = DEFAULT_ABS_MODE
     tc_mode: int = DEFAULT_TC_MODE
-    stability: bool = DEFAULT_STABILITY
+    stability: int = DEFAULT_STABILITY
     autoclutch: bool = DEFAULT_AUTOCLUTCH
     tyre_wear_rate: int = DEFAULT_TYRE_WEAR_RATE
     fuel_rate: int = DEFAULT_FUEL_RATE
     damage_multiplier: int = DEFAULT_DAMAGE_MULTIPLIER
     tyre_blankets: bool = DEFAULT_TYRE_BLANKETS
+    slipstream: int = DEFAULT_SLIPSTREAM
 
     @property
     def runs_practice(self) -> bool:
@@ -171,6 +177,15 @@ class Document:
 
     def remove_section(self, section: str) -> None:
         self._data.pop(section, None)
+
+    def remove_key(self, section: str, key: str) -> None:
+        """Elimina una clave; si la sección queda vacía, se elimina también."""
+        values = self._data.get(section)
+        if values is None:
+            return
+        values.pop(key, None)
+        if not values:
+            del self._data[section]
 
     def reorder(self, first: Sequence[str]) -> None:
         order = [s for s in first if s in self._data] + [s for s in self._data if s not in first]

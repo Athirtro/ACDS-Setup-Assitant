@@ -35,6 +35,11 @@ from .model import (
     DEFAULT_TYRE_WEAR_RATE,
     MAX_DAMAGE,
     MIN_RATE,
+    CSP_PREFIX,
+    DEFAULT_SLIPSTREAM,
+    MAX_RATE,
+    MAX_SLIPSTREAM,
+    MAX_STABILITY,
     Bundle,
     Document,
     Race,
@@ -102,14 +107,20 @@ class Contribution:
     def remove(cls, file: str, section: str) -> "Contribution":
         return cls(file, section, "*", None, True)
 
+    @classmethod
+    def discard(cls, file: str, section: str, key: str) -> "Contribution":
+        return cls(file, section, key, None, True)
+
     @property
     def address(self) -> str:
         return f"{self.file}:{self.section}:{self.key}"
 
     def apply(self, bundle: Bundle) -> None:
         doc = bundle.server if self.file == SERVER else bundle.entries
-        if self.drop:
+        if self.drop and self.key == "*":
             doc.remove_section(self.section)
+        elif self.drop:
+            doc.remove_key(self.section, self.key)
         else:
             doc.set(self.section, self.key, self.value)
 
@@ -324,7 +335,7 @@ class AssistsFeature(Feature):
         tc_mode = _num(server, "SERVER", "TC_ALLOWED", DEFAULT_TC_MODE)
         state.abs_mode = abs_mode if abs_mode in ASSIST_MODES else DEFAULT_ABS_MODE
         state.tc_mode = tc_mode if tc_mode in ASSIST_MODES else DEFAULT_TC_MODE
-        state.stability = self._flag(server, "STABILITY_ALLOWED", DEFAULT_STABILITY)
+        state.stability = min(_num(server, "SERVER", "STABILITY_ALLOWED", DEFAULT_STABILITY), MAX_STABILITY)
         state.autoclutch = self._flag(server, "AUTOCLUTCH_ALLOWED", DEFAULT_AUTOCLUTCH)
 
     @staticmethod
@@ -338,50 +349,74 @@ class AssistsFeature(Feature):
             out.append(Violation("ABS", f"Valores permitidos: {ASSIST_MODES}"))
         if state.tc_mode not in ASSIST_MODES:
             out.append(Violation("control de tracción", f"Valores permitidos: {ASSIST_MODES}"))
+        if not 0 <= state.stability <= MAX_STABILITY:
+            out.append(Violation("control de estabilidad", f"Debe estar entre 0 y {MAX_STABILITY}"))
         return out
 
     def project(self, state: State, base: Document) -> list[Contribution]:
         return [
             Contribution.put(SERVER, "SERVER", "ABS_ALLOWED", state.abs_mode),
             Contribution.put(SERVER, "SERVER", "TC_ALLOWED", state.tc_mode),
-            Contribution.put(SERVER, "SERVER", "STABILITY_ALLOWED", int(state.stability)),
+            Contribution.put(SERVER, "SERVER", "STABILITY_ALLOWED", state.stability),
             Contribution.put(SERVER, "SERVER", "AUTOCLUTCH_ALLOWED", int(state.autoclutch)),
         ]
 
 class RealismFeature(Feature):
+    """Realismo. El rebufo no es una clave de acServer: es una opción extra de CSP
+    (`[EXTRA_RULES] SLIPSTREAM_MULT`), que el adaptador publica en el mensaje de bienvenida."""
+
     id = "realism"
     owns = (
         "server:SERVER:TYRE_WEAR_RATE",
         "server:SERVER:FUEL_RATE",
         "server:SERVER:DAMAGE_MULTIPLIER",
         "server:SERVER:TYRE_BLANKETS_ALLOWED",
+        f"server:{CSP_PREFIX}EXTRA_RULES:SLIPSTREAM_MULT",
     )
+    CSP_SECTION = f"{CSP_PREFIX}EXTRA_RULES"
 
     def load(self, state: State, server: Document, entries: Document) -> None:
-        state.tyre_wear_rate = _num(server, "SERVER", "TYRE_WEAR_RATE", DEFAULT_TYRE_WEAR_RATE)
-        state.fuel_rate = _num(server, "SERVER", "FUEL_RATE", DEFAULT_FUEL_RATE)
+        state.tyre_wear_rate = min(_num(server, "SERVER", "TYRE_WEAR_RATE", DEFAULT_TYRE_WEAR_RATE), MAX_RATE)
+        state.fuel_rate = min(_num(server, "SERVER", "FUEL_RATE", DEFAULT_FUEL_RATE), MAX_RATE)
         damage = _num(server, "SERVER", "DAMAGE_MULTIPLIER", DEFAULT_DAMAGE_MULTIPLIER)
         state.damage_multiplier = damage if damage <= MAX_DAMAGE else DEFAULT_DAMAGE_MULTIPLIER
         raw = server.get("SERVER", "TYRE_BLANKETS_ALLOWED")
         state.tyre_blankets = DEFAULT_TYRE_BLANKETS if raw not in ("0", "1") else raw == "1"
+        state.slipstream = self._load_slipstream(server)
+
+    def _load_slipstream(self, server: Document) -> int:
+        try:
+            percent = round(float(server.get(self.CSP_SECTION, "SLIPSTREAM_MULT")) * 100)
+        except (ValueError, OverflowError):
+            return DEFAULT_SLIPSTREAM
+        return min(max(percent, 0), MAX_SLIPSTREAM)
 
     def validate(self, state: State) -> list[Violation]:
         out: list[Violation] = []
-        if state.tyre_wear_rate < MIN_RATE:
-            out.append(Violation("desgaste de neumáticos", f"Mínimo {MIN_RATE}"))
-        if state.fuel_rate < MIN_RATE:
-            out.append(Violation("consumo de combustible", f"Mínimo {MIN_RATE}"))
+        if not MIN_RATE <= state.tyre_wear_rate <= MAX_RATE:
+            out.append(Violation("desgaste de neumáticos", f"Debe estar entre {MIN_RATE} y {MAX_RATE}"))
+        if not MIN_RATE <= state.fuel_rate <= MAX_RATE:
+            out.append(Violation("consumo de combustible", f"Debe estar entre {MIN_RATE} y {MAX_RATE}"))
         if not 0 <= state.damage_multiplier <= MAX_DAMAGE:
             out.append(Violation("daños", f"Debe estar entre 0 y {MAX_DAMAGE}"))
+        if not 0 <= state.slipstream <= MAX_SLIPSTREAM:
+            out.append(Violation("rebufo", f"Debe estar entre 0 y {MAX_SLIPSTREAM}"))
         return out
 
     def project(self, state: State, base: Document) -> list[Contribution]:
-        return [
+        out = [
             Contribution.put(SERVER, "SERVER", "TYRE_WEAR_RATE", state.tyre_wear_rate),
             Contribution.put(SERVER, "SERVER", "FUEL_RATE", state.fuel_rate),
             Contribution.put(SERVER, "SERVER", "DAMAGE_MULTIPLIER", state.damage_multiplier),
             Contribution.put(SERVER, "SERVER", "TYRE_BLANKETS_ALLOWED", int(state.tyre_blankets)),
         ]
+        if state.slipstream != DEFAULT_SLIPSTREAM:
+            out.append(
+                Contribution.put(SERVER, self.CSP_SECTION, "SLIPSTREAM_MULT", f"{state.slipstream / 100:g}")
+            )
+        elif base.get(self.CSP_SECTION, "SLIPSTREAM_MULT"):
+            out.append(Contribution.discard(SERVER, self.CSP_SECTION, "SLIPSTREAM_MULT"))
+        return out
 
 
 class SlotsFeature(Feature):
