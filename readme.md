@@ -173,6 +173,7 @@ uv run ac_config.py --root "D:\SteamLibrary\steamapps\common\Assetto Corsa Dedic
 - Número de slots (solo jugadores humanos, sin IA).
 - Asignación de coches: el mismo para todos o uno por slot.
 - Asignación de liveries.
+- Ayudas (opcional; por defecto se conservan los valores actuales): ABS y control de tracción (0 = prohibido, 1 = solo coches que lo incluyen, 2 = todos), control de estabilidad y embrague automático (sí/no).
 
 > La práctica no tiene overtime: el servidor la termina exactamente al cumplirse su duración.
 
@@ -203,7 +204,7 @@ uv run ac_config.py --root "D:\SteamLibrary\steamapps\common\Assetto Corsa Dedic
 4. Soporte para el ajuste de temperatura ambiente y del asfalto.
 5. Soporte para el ajuste del viento.
 6. Soporte para el ajuste de condición del circuito.
-7. Soporte para el ajuste de ayudas (ABS, control de tracción, control de estabilidad, embrague automático).
+7. Soporte para el ajuste de ayudas (ABS, control de tracción, control de estabilidad, embrague automático). **En desarrollo:** implementado y probado.
 8. Soporte para el ajuste de realismo: desgaste de neumáticos, consumo de combustible, daños y mantas térmicas.
 9. Soporte para el ajuste completo de parámetros del servidor.
 10. Plantillas de sesión: Práctica, Hotlap, Race, Track Day y Weekend.
